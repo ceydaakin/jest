@@ -1017,9 +1017,10 @@ const readCacheFile = (cachePath: string): string | null => {
       throw error;
     }
     // on windows write-file-atomic is not atomic which can
-    // result in this error
+    // result in these errors when another worker renames the file
+    const {code} = error as NodeJS.ErrnoException;
     if (
-      (error as NodeJS.ErrnoException).code === 'ENOENT' &&
+      (code === 'ENOENT' || code === 'EPERM') &&
       process.platform === 'win32'
     ) {
       return null;

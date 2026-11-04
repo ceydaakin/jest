@@ -1668,6 +1668,63 @@ describe('ScriptTransformer', () => {
     expect(writeFileAtomic.sync).toHaveBeenCalled();
   });
 
+  it('treats an EPERM reading the cache on Windows as a cache miss', async () => {
+    const transformConfig: Config.ProjectConfig = {
+      ...config,
+      transform: [['\\.js$', 'test_preprocessor', {}]],
+    };
+    const scriptTransformer = await createScriptTransformer(transformConfig);
+    scriptTransformer.transform('/fruits/banana.js', getCoverageOptions());
+
+    const cachePath = getCachePath(mockFs, config);
+    const mockFsCopy = mockFs;
+    const realPlatform = process.platform;
+
+    // Another worker's rename of the cache file makes the read fail.
+    const transformWithCacheReadEPERM = async (platform: NodeJS.Platform) => {
+      jest.resetModules();
+      reset();
+      mockFs = mockFsCopy;
+
+      const readFileSync = jest.mocked(fs.readFileSync);
+      const readSource = readFileSync.getMockImplementation()!;
+      readFileSync.mockImplementation((path, options) => {
+        if (path === cachePath) {
+          throw Object.assign(new Error('EPERM: operation not permitted'), {
+            code: 'EPERM',
+          });
+        }
+        return readSource(path, options);
+      });
+
+      const transformer = await createScriptTransformer(transformConfig);
+      // `process.platform` is read-only, so `jest.replaceProperty` cannot restore it.
+      Object.defineProperty(process, 'platform', {
+        configurable: true,
+        value: platform,
+      });
+      try {
+        return transformer.transform('/fruits/banana.js', getCoverageOptions());
+      } finally {
+        Object.defineProperty(process, 'platform', {
+          configurable: true,
+          value: realPlatform,
+        });
+      }
+    };
+
+    await transformWithCacheReadEPERM('win32');
+
+    expect(fs.readFileSync).toHaveBeenCalledWith(cachePath, 'utf8');
+    expect(fs.unlinkSync).not.toHaveBeenCalled();
+    expect(writeFileAtomic.sync).toHaveBeenCalled();
+
+    // Elsewhere an EPERM is not a known race, so it still fails.
+    await expect(transformWithCacheReadEPERM('linux')).rejects.toThrow(
+      `jest: failed to read cache file: ${cachePath}`,
+    );
+  });
+
   it('in async mode, reads values from the cache', async () => {
     const transformConfig: Config.ProjectConfig = {
       ...config,
