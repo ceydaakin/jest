@@ -340,8 +340,12 @@ export const formatPath = (
   config: StackTraceConfig,
   relativeTestPath: string | null = null,
 ): string => {
-  // Extract the file path from the trace line.
-  const match = line.match(/(^\s*at .*?\(?)([^()]+)(:\d+:\d+\)?.*$)/);
+  // Extract the file path from the trace line. The path may contain balanced
+  // parentheses without a colon, e.g. `/home/me/project (1)/file.js`; the colon
+  // rule keeps `(file.js:1:2)` inside an eval origin from joining the path.
+  const match = line.match(
+    /(^\s*at .*?\(?)([^()]+(?:\([^():]*\)[^()]*)*)(:\d+:\d+\)?.*$)/,
+  );
   if (!match) {
     return line;
   }
@@ -367,13 +371,29 @@ export function getStackTraceLines(
   return removeInternalStackEntries(stack.split(/\n/), options);
 }
 
+// stack-utils reads the anonymous frame `at /dir (1)/file.js:1:2` as function
+// `/dir` in file `1)/file.js`. V8 wraps the location in parentheses whenever a
+// frame has a function name, so a frame that does not end with `)` is
+// anonymous: parse its location on its own to keep the whole path.
+function parseFrame(line: string) {
+  if (line.startsWith('at ') && line.includes('(') && !line.endsWith(')')) {
+    const location = line.slice('at '.length);
+    const frame = stackUtils.parseLine(`at anonymous (${location})`);
+    if (frame) {
+      delete frame.function;
+    }
+    return frame;
+  }
+  return stackUtils.parseLine(line);
+}
+
 export function getTopFrame(lines: Array<string>): Frame | null {
   for (const line of lines) {
     if (line.includes(PATH_NODE_MODULES) || isJestInternalFrame(line)) {
       continue;
     }
 
-    const parsedFrame = stackUtils.parseLine(line.trim());
+    const parsedFrame = parseFrame(line.trim());
 
     if (parsedFrame && parsedFrame.file) {
       if (parsedFrame.file.startsWith('file://')) {

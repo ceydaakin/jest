@@ -1036,3 +1036,68 @@ describe('frame classification', () => {
     expect(format(file, testFile)).toContain(`source of ${file}`);
   });
 });
+
+describe('paths with parentheses', () => {
+  it('keeps paths that contain parentheses', () => {
+    const dir = path.join(rootDir, 'jest (copy)');
+    jest
+      .mocked(readFileSync)
+      .mockImplementationOnce(() => 'throw new Error("Whoops!");');
+    const message = formatStackTrace(
+      `
+      at ${slash(dir)}/file.js:1:7
+      at Object.<anonymous> (${slash(dir)}/file.js:2:7)
+  `,
+      {
+        rootDir,
+        testMatch: [],
+      },
+      {
+        noCodeFrame: false,
+        noStackTrace: false,
+      },
+    );
+
+    expect(stripVTControlCharacters(message)).toBe(
+      [
+        '',
+        '    > 1 | throw new Error("Whoops!");',
+        '        |       ^',
+        '',
+        `      at ${slash(path.join('jest (copy)', 'file.js'))}:1:7`,
+        `      at Object.<anonymous> (${slash(path.join('jest (copy)', 'file.js'))}:2:7)`,
+        '        ',
+      ].join('\n'),
+    );
+  });
+
+  it('still relativizes the eval origin of an eval frame', () => {
+    const message = formatStackTrace(
+      `
+      at eval (eval at <anonymous> (${slash(rootDir)}/file.js:1:2), <anonymous>:3:4)
+  `,
+      {
+        rootDir,
+        testMatch: [],
+      },
+      {
+        noCodeFrame: true,
+        noStackTrace: false,
+      },
+    );
+
+    expect(stripVTControlCharacters(message)).toBe(
+      '\n      at eval (eval at <anonymous> (file.js:1:2), <anonymous>:3:4)\n        ',
+    );
+  });
+
+  it('getTopFrame returns the whole path of an anonymous frame', () => {
+    const frame = getTopFrame(['  at /home/me/jest (copy)/sum.test.js:3:15']);
+
+    expect(frame).toEqual({
+      column: 15,
+      file: '/home/me/jest (copy)/sum.test.js',
+      line: 3,
+    });
+  });
+});
