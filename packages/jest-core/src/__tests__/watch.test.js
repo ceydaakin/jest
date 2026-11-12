@@ -47,7 +47,11 @@ jest.doMock(
     function () {
       const args = [...arguments];
       const [{onComplete}] = args;
-      runJestMock.apply(null, args);
+      const pendingRun = runJestMock.apply(null, args);
+
+      if (pendingRun instanceof Promise) {
+        return pendingRun.then(() => onComplete(results));
+      }
 
       // Call the callback
       onComplete(results);
@@ -612,6 +616,101 @@ describe('Watch mode flows', () => {
           testPaths: ['./path/to/file1-test.js', './path/to/file2-test.js'],
         },
       ],
+    });
+  });
+
+  describe('when a file changes while a run is in progress', () => {
+    let emitChange;
+    let finishRun;
+
+    const holdNextRun = () => {
+      runJestMock.mockImplementationOnce(
+        () =>
+          new Promise(resolve => {
+            finishRun = resolve;
+          }),
+      );
+    };
+
+    const changeFile = () => {
+      emitChange({
+        eventsQueue: [{filePath: '/path/to/file1-test.js'}],
+        hasteFS: {},
+        moduleMap: {},
+      });
+    };
+
+    const endHeldRun = async () => {
+      finishRun();
+      await nextTick();
+      await nextTick();
+    };
+
+    beforeEach(() => {
+      hasteMapInstances = [
+        {
+          on: (event, callback) => {
+            if (event === 'change') {
+              emitChange = callback;
+            }
+          },
+        },
+      ];
+      contexts = [
+        {
+          config: {
+            ...contexts[0].config,
+            haste: {},
+            moduleFileExtensions: ['js'],
+          },
+        },
+      ];
+    });
+
+    it('runs again once that run ends', async () => {
+      holdNextRun();
+      await watch(globalConfig, contexts, pipe, hasteMapInstances, stdin);
+
+      changeFile();
+      expect(runJestMock).toHaveBeenCalledTimes(1);
+
+      await endHeldRun();
+      expect(runJestMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not run again when nothing changed during the run', async () => {
+      holdNextRun();
+      await watch(globalConfig, contexts, pipe, hasteMapInstances, stdin);
+
+      await endHeldRun();
+      expect(runJestMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not repeat "update snapshot" mode in the new run', async () => {
+      const hooks = new JestHook();
+      globalConfig.updateSnapshot = 'new';
+      await watch(
+        globalConfig,
+        contexts,
+        pipe,
+        hasteMapInstances,
+        stdin,
+        hooks,
+      );
+      hooks.getEmitter().onTestRunComplete({snapshot: {failure: true}});
+
+      holdNextRun();
+      stdin.emit('u');
+      changeFile();
+      await endHeldRun();
+
+      expect(runJestMock).toHaveBeenCalledTimes(3);
+      expect(runJestMock.mock.calls[1][0].globalConfig).toMatchObject({
+        updateSnapshot: 'all',
+      });
+      expect(runJestMock.mock.calls[2][0].globalConfig).toMatchObject({
+        updateSnapshot: 'new',
+      });
     });
   });
 

@@ -224,6 +224,7 @@ export default async function watch(
     searchSource: new SearchSource(context),
   }));
   let isRunning = false;
+  let hasChangedDuringRun = false;
   let testWatcher: TestWatcher;
   let shouldDisplayWatchUsage = true;
   let isWatchUsageDisplayed = false;
@@ -266,6 +267,9 @@ export default async function watch(
           searchSource: new SearchSource(context),
         };
         emitFileChange();
+        if (isRunning) {
+          hasChangedDuringRun = true;
+        }
         startRun(globalConfig);
       }
     });
@@ -280,6 +284,15 @@ export default async function watch(
       }
     });
   }
+
+  // Reads the outer `globalConfig`, not the one of the run that just ended,
+  // so per-run options such as `updateSnapshot: 'all'` are not repeated.
+  const rerunIfChangedDuringRun = () => {
+    if (hasChangedDuringRun && !isRunning) {
+      hasChangedDuringRun = false;
+      startRun(globalConfig);
+    }
+  };
 
   const startRun = async (globalConfig: Config.GlobalConfig): Promise<void> => {
     if (isRunning) {
@@ -344,6 +357,8 @@ export default async function watch(
         })}`,
       );
     }
+
+    rerunIfChangedDuringRun();
   };
 
   const onKeypress = (key: string) => {
