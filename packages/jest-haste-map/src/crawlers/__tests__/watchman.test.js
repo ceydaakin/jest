@@ -726,4 +726,35 @@ describe('watchman watch', () => {
     const client = watchman.Client.mock.instances[0];
     expect(client.connect).not.toHaveBeenCalled();
   });
+
+  // fb-watchman reports a failed `watchman get-sockname` only through the
+  // client `error` event and never calls back the queued command, so the
+  // crawl has to reject on that event for the node crawler fallback to run.
+  test.each(['capabilityCheck', 'command'])(
+    'rejects when the client errors while %s is pending',
+    async method => {
+      watchman.Client.prototype[method].mockImplementationOnce(() => {});
+      watchman.Client.prototype.on.mockImplementationOnce((event, listener) =>
+        setImmediate(() =>
+          listener(new Error('get-sockname returned with exit code=1')),
+        ),
+      );
+
+      await expect(
+        watchmanCrawl({
+          data: {
+            clocks: new Map(),
+            files: new Map(),
+          },
+          extensions: ['js', 'json'],
+          ignore: pearMatcher,
+          rootDir: ROOT_MOCK,
+          roots: [ROOT_MOCK],
+        }),
+      ).rejects.toThrow(
+        'Watchman error: get-sockname returned with exit code=1.',
+      );
+      expect(watchman.Client.mock.instances[0].end).toHaveBeenCalled();
+    },
+  );
 });
